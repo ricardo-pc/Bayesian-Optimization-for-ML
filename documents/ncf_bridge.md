@@ -1,9 +1,9 @@
-# NCF Bridge — How BO Calls the CS 289A Training Pipeline
+# Model Bridge — How BO Calls the CS 289A Training Pipeline
 
 This document is the interface spec between the STAT 238 BO code and the CS 289A
-training pipeline. The BO loop treats `train.py` as a black-box function: it passes
-in a hyperparameter config, waits for the process to finish, and reads back the
-validation NDCG@10.
+training pipeline for both NCF and MF. The BO loop treats `train.py` as a black-box
+function: it passes in a hyperparameter config, waits for the process to finish,
+and reads back the validation NDCG@10.
 
 ---
 
@@ -174,3 +174,105 @@ density = 0.2  →  retrain NCF at θ*  →  test NDCG@10
 ```
 
 The 5 test NDCG@10 values form the NCF line in the main figure of the CS 289A paper.
+
+---
+
+## MF Search Space and Interface
+
+MF has no MLP, so the search space is 4D instead of 5D — no `mlp_layers` parameter.
+
+### Hyperparameter Search Space
+
+| Parameter | Flag | Type | Search Range | Notes |
+|---|---|---|---|---|
+| Embedding dimension | `--emb-dim` | integer | {32, 64, 128, 256} | size of p_u and q_i |
+| Learning rate | `--lr` | log-continuous | [1e-4, 1e-2] | Adam lr |
+| L2 weight decay | `--l2` | log-continuous | [1e-6, 1e-3] | ridge on all params |
+| WMF confidence scale | `--alpha` | continuous | [0.5, 5.0] | c_ui = 1 + alpha * rating |
+
+Fixed (not tuned by BO):
+- `--model mf`
+- `--density 1.0`
+- `--epochs 15` — MF converges faster than NCF, 15 epochs is sufficient
+- `--batch-size 1024`
+- `--device cpu` — MF is simple enough for CPU; feasible overnight on MacBook
+- `--n-neg 4`
+
+### How to Call train.py from Python
+
+```python
+def evaluate_mf(config: dict, cs289_repo: str) -> float:
+    """
+    Run one MF training trial and return val NDCG@10.
+
+    config keys: emb_dim (int), lr (float), l2 (float), alpha (float)
+    cs289_repo: absolute path to the cs289-ranking repo root
+    """
+    cmd = [
+        "python", "src/train.py",
+        "--model",      "mf",
+        "--density",    "1.0",
+        "--epochs",     "15",
+        "--batch-size", "1024",
+        "--device",     "cpu",
+        "--emb-dim",    str(config["emb_dim"]),
+        "--lr",         str(config["lr"]),
+        "--l2",         str(config["l2"]),
+        "--alpha",      str(config["alpha"]),
+    ]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        cwd=cs289_repo,
+    )
+
+    match = re.search(r"NDCG@10\s*=\s*([0-9.]+)", result.stdout)
+    if match is None:
+        raise RuntimeError(f"Could not parse NDCG@10:\n{result.stdout}\n{result.stderr}")
+
+    return float(match.group(1))
+```
+
+### Expected Runtime
+
+| Setup | Time per trial |
+|---|---|
+| MacBook CPU | ~20-30 min (MF is ~4x faster than NCF per epoch) |
+| SCF GPU | ~1-2 min |
+
+Total MF BO budget: 15-20 trials → ~5-8 hours on CPU overnight, or ~30 min on GPU.
+
+### Encoding for the GP
+
+MF input vector is 4D: `x = [emb_dim_x, x_lr, x_l2, alpha]`
+
+```python
+emb_dim_to_x = {32: 0.0, 64: 1.0, 128: 2.0, 256: 3.0}  # log scale
+x_lr  = log(lr)    # [log(1e-4), log(1e-2)]
+x_l2  = log(l2)    # [log(1e-6), log(1e-3)]
+# alpha: as-is, [0.5, 5.0]
+```
+
+### Results Logging
+
+Log trials to `results/mf/trials.csv`:
+```
+trial, emb_dim, lr, l2, alpha, val_ndcg, runtime_s
+1, 64, 0.001, 1e-05, 1.0, 0.3857, 1180
+...
+```
+
+### Unoptimized baseline (Jonas, default hyperparameters, val set)
+
+| Density | Val NDCG@10 |
+|---|---|
+| 100% | 0.3857 |
+| 80% | 0.3810 |
+| 60% | 0.3717 |
+| 40% | 0.3617 |
+| 20% | 0.3215 |
+
+BO target: improve on 0.3857 at density=1.0. Test-set evaluation via `evaluate.py`
+runs after BO with the best checkpoint, same as NCF.

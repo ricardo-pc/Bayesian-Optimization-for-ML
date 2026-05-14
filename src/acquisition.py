@@ -151,7 +151,7 @@ def next_best_candidate(
 
     def neg_ei(x: np.ndarray) -> float:
         """Negative EI (scalar) for a single point — scipy expects minimisation."""
-        return -float(expected_improvement(x.reshape(1, -1), gp, y_best, xi=xi))
+        return -float(expected_improvement(x.reshape(1, -1), gp, y_best, xi=xi)[0])
 
     best_ei = -np.inf
     best_x = X_starts[0]

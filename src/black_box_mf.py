@@ -196,6 +196,8 @@ class MFBlackBox:
 
         if proc.returncode != 0:
             print(f"  [ERROR] train.py exited with code {proc.returncode}")
+            if stderr_lines:
+                print(f"  stderr: {''.join(stderr_lines[-20:])}")
             return self.penalty, 0.0
 
         stdout_text  = "".join(stdout_lines)
