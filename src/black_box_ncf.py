@@ -280,39 +280,65 @@ class NCFBlackBox:
         if self.verbose:
             print(f"  cmd: {' '.join(cmd)}")
 
+        # Stream stdout line-by-line so epoch progress is visible in real time.
+        # We accumulate all output to parse NDCG@10 at the end.
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
+        returncode = 0
+
         try:
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                cwd=str(self.cs289_repo),   # run from repo root so src/ imports work
-                timeout=7200,               # 2-hour hard cap per trial
+                cwd=str(self.cs289_repo),
             )
-        except subprocess.TimeoutExpired:
-            print(f"  [ERROR] trial {self._trial_count} timed out after 2 hours")
-            return self.penalty, 0.0
+
+            # Read stdout line by line, printing immediately if verbose
+            import threading, time as _time
+
+            def _drain_stderr():
+                for line in proc.stderr:
+                    stderr_lines.append(line)
+
+            stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+            stderr_thread.start()
+
+            deadline = _time.monotonic() + 7200   # 2-hour hard cap
+            for line in proc.stdout:
+                stdout_lines.append(line)
+                if self.verbose:
+                    print(f"  {line}", end="", flush=True)
+                if _time.monotonic() > deadline:
+                    proc.kill()
+                    print(f"\n  [ERROR] trial {self._trial_count} timed out after 2 hours")
+                    return self.penalty, 0.0
+
+            proc.wait()
+            stderr_thread.join(timeout=5)
+            returncode = proc.returncode
+
         except Exception as e:
             print(f"  [ERROR] subprocess failed: {e}")
             return self.penalty, 0.0
 
-        if self.verbose and result.stdout:
-            # Print last 5 lines of stdout (epoch table + final summary)
-            tail = "\n".join(result.stdout.strip().splitlines()[-5:])
-            print(f"  stdout (tail):\n{tail}")
+        stdout_text = "".join(stdout_lines)
+        stderr_text = "".join(stderr_lines)
 
-        if result.returncode != 0:
-            print(f"  [ERROR] train.py exited with code {result.returncode}")
-            if result.stderr:
-                print(f"  stderr: {result.stderr[-500:]}")
+        if returncode != 0:
+            print(f"\n  [ERROR] train.py exited with code {returncode}")
+            if stderr_text:
+                print(f"  stderr: {stderr_text[-500:]}")
             return self.penalty, 0.0
 
         # Parse "Best val  NDCG@10 = 0.4821  HR@10 = 0.7103"
-        ndcg_match = re.search(r"NDCG@10\s*=\s*([0-9.]+)", result.stdout)
-        hr_match   = re.search(r"HR@10\s*=\s*([0-9.]+)",   result.stdout)
+        ndcg_match = re.search(r"NDCG@10\s*=\s*([0-9.]+)", stdout_text)
+        hr_match   = re.search(r"HR@10\s*=\s*([0-9.]+)",   stdout_text)
 
         if ndcg_match is None:
             print(f"  [ERROR] could not parse NDCG@10 from stdout")
-            print(f"  stdout: {result.stdout[-300:]}")
+            print(f"  stdout (tail): {''.join(stdout_lines[-5:])}")
             return self.penalty, 0.0
 
         ndcg = float(ndcg_match.group(1))
