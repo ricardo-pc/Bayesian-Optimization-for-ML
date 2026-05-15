@@ -49,12 +49,11 @@ def parse_args():
     p.add_argument(
         "--upworthy-repo",
         type=str,
-        default=os.path.expanduser(
-            "~/Library/CloudStorage/OneDrive-Personal/Documents/Berkeley"
-            "/Spring 2026/STAT 230A/Final Project/Github"
-            "/A-B-testing-analysis-upworthy"
+        default=None,
+        help=(
+            "Optional path to the A-B-testing-analysis-upworthy repo root. "
+            "By default the bundled CSVs in data/upworthy/ are used."
         ),
-        help="Path to the A-B-testing-analysis-upworthy repo root",
     )
     p.add_argument(
         "--results-dir",

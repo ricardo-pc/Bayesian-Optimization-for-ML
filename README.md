@@ -1,148 +1,159 @@
-# Bayesian Optimization for Expensive Black-Box ML Pipelines
+# Bayesian Optimisation for Machine Learning
 
-STAT 238, UC Berkeley · Spring 2026
+**STAT 238 Final Project · UC Berkeley Spring 2026**
+*Ricardo Perez Castillo*
 
-**Core question:** How much more sample-efficient is Bayesian Optimization compared to
-random search and grid search when each function evaluation takes minutes?
-
-- Full methodology and design decisions: [`documents/STAT238_Final_Project_Proposal.pdf`](documents/STAT238_Final_Project_Proposal.pdf)
-- NCF black-box interface spec: [`documents/ncf_bridge.md`](documents/ncf_bridge.md)
-
----
-
-## Experiments
-
-Three experiments, in priority order:
-
-**0. Simulation — Branin function**  
-Verify the BO implementation on a 2D benchmark with a known global minimum before
-touching real data. Visualize how the GP surrogate and EI acquisition function evolve
-across iterations. The Branin function is:
-
-$$f(x_1, x_2) = a(x_2 - bx_1^2 + cx_1 - r)^2 + s(1-t)\cos(x_1) + s$$
-
-with standard constants $a=1,\ b=5.1/(4\pi^2),\ c=5/\pi,\ r=6,\ s=10,\ t=1/(8\pi)$
-and global minimum $f^\star \approx 0.397$ at three locations.
-
-**Experiment 1 — NCF hyperparameter tuning (MovieLens 1M)**  
-Tune embedding dimension, MLP hidden layers, learning rate, L2 regularization, and WMF
-confidence scaling for Neural Collaborative Filtering. Objective: validation NDCG@10.
-Approximately 4 min per trial on GPU, 25–30 trials. Best config feeds directly into the
-CS 289A sparsity analysis.
-
-**Experiment 2 — Upworthy zero-shot classification pipeline**  
-Tune the candidate label set, number of categories $K$, and confidence threshold for
-`facebook/bart-large-mnli`. Objective: $F$-statistic from one-way ANOVA of $\log(\text{CTR})$
-on inferred labels. Approximately 30 s per trial, 60–80 trials.
+A from-scratch implementation of Bayesian Optimisation (Gaussian Process surrogate +
+Expected Improvement acquisition) applied to two real machine-learning hyperparameter
+tuning problems, plus a Branin-function sanity check.
 
 ---
 
-## Folder Structure
+## TL;DR
+
+| Experiment | Search space | Budget | Best objective | Comparison |
+|---|---|---|---|---|
+| **Branin (simulation)** | 2-D continuous | 40 trials | $-0.43$ (true min $-0.398$) | BO converges; grid search plateaus far above |
+| **Experiment 1 — NCF on MovieLens 1M** | 5-D mixed | 15 trials (~5.5 GPU hrs) | NDCG@10 = **0.4056** | **+8.3 %** vs best-of-5 random init |
+| **Experiment 2 — Upworthy classifier thresholds** | 2-D mixed | 60 trials | F = **1568.7** | **BO 1568.7 > Random 1514.0 > Grid 1435.2** |
+
+Full write-up: see notebooks (suggested order below).
+
+---
+
+## Quick Start
+
+```bash
+# 1. Create the conda environment
+conda env create -f environment.yaml
+conda activate stat238-bo
+
+# 2. Open the notebooks in order
+jupyter lab notebooks/
+```
+
+Suggested reading order:
+
+1. `notebooks/introduction.ipynb` — project motivation and high-level results
+2. `notebooks/00_branin_simulation.ipynb` — BO sanity check on a known 2-D function
+3. `notebooks/01_ncf_bo.ipynb` — Experiment 1 (NCF / MovieLens 1M)
+4. `notebooks/02_upworthy_bo.ipynb` — Experiment 2 (Upworthy classifier)
+
+All notebooks load pre-computed results from `results/` so they render in seconds —
+no GPU required.
+
+---
+
+## Repository Structure
 
 ```
 Bayesian-Optimization-for-ML/
+├── README.md
+├── environment.yaml
 ├── documents/
-│   ├── STAT238_Final_Project_Proposal.pdf
-│   ├── ProjectTopics238Spring2026.pdf
-│   └── ncf_bridge.md          # how BO calls train.py and parses NDCG@10
-├── notebooks/
-│   ├── 00_branin_simulation.ipynb   # sanity check on known 2D benchmark
-│   ├── 01_ncf_bo.ipynb              # Experiment 1: NCF on MovieLens 1M
-│   └── 02_upworthy_bo.ipynb         # Experiment 2: Upworthy zero-shot pipeline
-├── src/
-│   ├── gp.py                  # GP surrogate: SE kernel, marginal likelihood, posterior
-│   ├── acquisition.py         # Expected Improvement (EI), closed form
-│   ├── bo.py                  # BO loop: initialize → fit GP → maximize EI → evaluate
-│   ├── black_box_ncf.py       # calls cs289-ranking/src/train.py, parses NDCG@10
-│   └── black_box_upworthy.py  # BART zero-shot pipeline, returns F-statistic
-├── results/
-│   ├── ncf/                   # trial logs: trials.csv with (config, NDCG@10, runtime)
-│   └── upworthy/              # trial logs: trials.csv with (config, F-statistic, runtime)
-├── figures/                   # convergence curves, GP surrogate plots
-└── environment.yml
+│   ├── STAT238_Final_Project_Proposal.pdf   # original proposal
+│   └── ncf_bridge.md                        # NCF black-box interface spec
+├── data/                                    # ← input data for the experiments
+│   ├── README.md                            # provenance + column descriptions
+│   └── upworthy/
+│       ├── categories_raw.csv               # BART zero-shot category preds
+│       └── confirmatory_clean.csv           # headline + log-CTR (trimmed)
+├── src/                                     # ← BO implementation (from scratch)
+│   ├── gp.py                                # GP with SE kernel, Cholesky solver,
+│   │                                        # marginal-likelihood hyperparam fitting
+│   ├── acquisition.py                       # Expected Improvement (closed form)
+│   │                                        # + L-BFGS-B maximisation on [0,1]^d
+│   ├── bo.py                                # BO loop: random init → fit GP →
+│   │                                        # maximise EI → evaluate → repeat
+│   ├── black_box_ncf.py                     # NCF training wrapper (CLI subprocess)
+│   └── black_box_upworthy.py                # Upworthy ANOVA F-stat objective
+├── jobs/                                    # ← runner scripts
+│   ├── run_bo_ncf.py                        # ran on SCF GPU cluster
+│   └── run_bo_upworthy.py                   # ran locally + baselines (random / grid)
+├── notebooks/                               # ← analysis + figures
+│   ├── introduction.ipynb
+│   ├── 00_branin_simulation.ipynb
+│   ├── 01_ncf_bo.ipynb
+│   └── 02_upworthy_bo.ipynb
+├── results/                                 # raw trial logs (CSV, one row per trial)
+│   ├── ncf/trials.csv
+│   └── upworthy/{bo_trials,random_trials,grid_trials}.csv
+└── figures/                                 # PNGs exported from the notebooks
 ```
 
 ---
 
-## Methods
-
-### GP Surrogate (Lecture 23, STAT 238)
+## Method
 
 We model the black-box objective $f : \mathcal{X} \to \mathbb{R}$ as a Gaussian process
-with mean zero and squared exponential (SE) kernel:
+with zero mean and a squared-exponential kernel:
 
-$$K(x, x') = \alpha \exp\!\left(-\frac{\|x - x'\|^2}{2\ell^2}\right)$$
+$$K(x, x') = \alpha \exp\!\left(-\frac{\|x - x'\|^2}{2\ell^2}\right).$$
 
-where $\alpha > 0$ is the output scale and $\ell > 0$ is the lengthscale. Observations
-are noisy: $y_i = f(x_i) + \varepsilon_i$ with $\varepsilon_i \overset{\text{i.i.d.}}{\sim} \mathcal{N}(0, \sigma^2)$.
+Observations are noisy, $y_i = f(x_i) + \varepsilon_i$ with
+$\varepsilon_i \sim \mathcal{N}(0, \sigma^2)$.
 
-Given $n$ observations $(x_1, y_1), \ldots, (x_n, y_n)$, define
+Given $n$ observations, the GP posterior at a new point $x$ is Gaussian with
 
-$$K = \bigl(K(x_i, x_j)\bigr)_{n \times n}, \qquad \mathbf{k}(x) = \bigl(K(x_i, x)\bigr)_{n \times 1}.$$
+$$\mu(x) = \mathbf{k}(x)^\top \bigl(K + \sigma^2 I\bigr)^{-1} y,\qquad
+v(x) = K(x,x) - \mathbf{k}(x)^\top \bigl(K + \sigma^2 I\bigr)^{-1} \mathbf{k}(x).$$
 
-The posterior distribution of $f(x)$ given the data is (Lecture 23, Eq. 2):
+Hyperparameters $(\alpha, \ell, \sigma^2)$ are refit at every BO iteration by maximising
+the log marginal likelihood. The next point to evaluate is chosen by maximising
+**Expected Improvement**:
 
-$$f(x) \mid \text{data} \sim \mathcal{N}\!\left(\mu(x),\ v(x)\right)$$
+$$\mathrm{EI}(x) = (\mu(x) - f^\star)\Phi(Z) + \sqrt{v(x)}\,\phi(Z),
+\qquad Z = \frac{\mu(x) - f^\star}{\sqrt{v(x)}}$$
 
-with
+where $f^\star$ is the best observation so far. EI is maximised over the unit cube via
+multi-start L-BFGS-B (`scipy.optimize.minimize`).
 
-$$\mu(x) = \mathbf{k}(x)^\top \bigl(K + \sigma^2 I_n\bigr)^{-1} y$$
+The full BO loop is:
 
-$$v(x) = K(x, x) - \mathbf{k}(x)^\top \bigl(K + \sigma^2 I_n\bigr)^{-1} \mathbf{k}(x).$$
+```
+1. Evaluate f at n_init random configurations  →  dataset D
+2. For t = n_init + 1, …, T:
+     a. Fit GP on D (refit hyperparams via marginal likelihood)
+     b. x_t = argmax_x EI(x ; GP)
+     c. y_t = f(x_t)              ← expensive black-box call
+     d. D ← D ∪ {(x_t, y_t)}
+3. Return x* = argmax_t y_t
+```
 
-Hyperparameters $(\alpha, \ell, \sigma^2)$ are fit at each BO iteration by maximizing the
-log marginal likelihood:
+Inputs are normalised to $[0,1]^d$ before the GP sees them; outputs are standardised to
+zero mean and unit variance during fitting and inverted before reporting. See
+`src/bo.py` for details.
 
-$$\log p(y) = -\frac{1}{2}\, y^\top \bigl(K + \sigma^2 I_n\bigr)^{-1} y
-              - \frac{1}{2} \log \bigl|K + \sigma^2 I_n\bigr|
-              - \frac{n}{2} \log 2\pi.$$
+---
 
-### Acquisition Function — Expected Improvement
+## Reproducing the results
 
-Let $f^\star = \max_{i} y_i$ be the best observation so far. The Expected Improvement
-acquisition function is:
+**Branin and Upworthy** run locally in seconds to minutes — open the notebooks and
+re-run all cells. The Upworthy experiment depends on the two CSVs in
+`data/upworthy/` (~11 MB total, included in this repo — see `data/README.md`).
 
-$$\mathrm{EI}(x) = \bigl(\mu(x) - f^\star\bigr)\,\Phi(Z) + \sqrt{v(x)}\,\phi(Z), \qquad
-Z = \frac{\mu(x) - f^\star}{\sqrt{v(x)}}$$
+**NCF** requires a GPU. The exact run used an RTX 2080 Ti on the Berkeley SCF cluster,
+with each trial taking ~22 minutes (10 epochs on MovieLens 1M).
 
-where $\Phi$ and $\phi$ are the standard normal CDF and PDF. The term $\mu(x) - f^\star$
-drives exploitation; $\sqrt{v(x)}$ drives exploration. EI is maximized numerically using
-BoTorch.
+```bash
+# On a GPU node (after activating an env with torch installed)
+python jobs/run_bo_ncf.py --budget 15 --n-init 5
+```
 
-### BO Loop
-
-1. Draw $n_0 = 5$ random initial configurations and evaluate the black box.
-2. Repeat until budget exhausted:
-   - Fit GP hyperparameters $(\alpha, \ell, \sigma^2)$ by maximizing $\log p(y)$.
-   - Find $x_{\text{next}} = \arg\max_x \mathrm{EI}(x)$ via BoTorch.
-   - Evaluate $y_{\text{next}} = f(x_{\text{next}})$ (expensive black-box call).
-   - Append $(x_{\text{next}}, y_{\text{next}})$ to the observation set.
-
-### Baselines
-
-Random search and grid search at matched evaluation budgets (25–30 trials), compared via
-convergence curves: best $y$ seen so far vs. trial number.
-
-### NCF Search Space
-
-The GP operates on a 5-dimensional continuous vector $x \in \mathcal{X}$:
-
-| Parameter | Encoding | Range |
-|---|---|---|
-| Embedding dim $d$ | $\log_2(d) - 5$ (ordinal) | $\{0, 1, 2, 3\}$ |
-| MLP config | ordinal by depth | $\{0, 1, 2\}$ |
-| Learning rate $\eta$ | $\log(\eta)$ | $[\log 10^{-4},\ \log 10^{-2}]$ |
-| L2 weight decay $\lambda$ | $\log(\lambda)$ | $[\log 10^{-6},\ \log 10^{-3}]$ |
-| WMF scale $\alpha_{\text{wmf}}$ | as-is | $[0.5,\ 5.0]$ |
-
-Log-transforming $\eta$ and $\lambda$ ensures the SE kernel assigns meaningful distances
-across several orders of magnitude.
+The runner appends to `results/ncf/trials.csv` after every trial so it is safe to
+interrupt and resume.
 
 ---
 
 ## References
 
-- Frazier (2018) — A Tutorial on Bayesian Optimization. *arXiv:1807.02811*
-- Snoek, Larochelle, Adams (2012) — Practical Bayesian Optimization of Machine Learning Algorithms. *NeurIPS 2012*
-- Hennig, Osborne, Kersting (2022) — *Probabilistic Numerics*. Cambridge University Press
-- Guntuboyina (2026) — STAT 238 Lecture Notes, Lectures 22–23. UC Berkeley
+- Frazier, P. (2018). *A Tutorial on Bayesian Optimization.* arXiv:1807.02811.
+- Snoek, J., Larochelle, H., & Adams, R. P. (2012). *Practical Bayesian Optimization of
+  Machine Learning Algorithms.* NeurIPS 2012.
+- Hennig, P., Osborne, M. A., & Kersting, H. P. (2022). *Probabilistic Numerics.*
+  Cambridge University Press.
+- Guntuboyina, A. (2026). *STAT 238 Lecture Notes, Lectures 22–23.* UC Berkeley.
+- He, X., Liao, L., Zhang, H., Nie, L., Hu, X., & Chua, T.-S. (2017).
+  *Neural Collaborative Filtering.* WWW 2017.
+- Salganik, M. J. et al. (2020). *Measuring the predictability of life outcomes with a
+  scientific mass collaboration.* PNAS 117(15).

@@ -158,19 +158,21 @@ class UpworthyBlackBox:
 
     def __init__(
         self,
-        upworthy_repo: str | Path,
+        upworthy_repo: str | Path | None = None,
         results_dir: str | Path | None = None,
         min_groups: int = 2,
         penalty: float = 0.0,
         verbose: bool = True,
     ) -> None:
-        self.upworthy_repo = Path(upworthy_repo).resolve()
+        self.upworthy_repo = Path(upworthy_repo).resolve() if upworthy_repo else None
         self.min_groups    = min_groups
         self.penalty       = penalty
         self.verbose       = verbose
 
+        repo_root = Path(__file__).resolve().parent.parent
+
         if results_dir is None:
-            results_dir = Path(__file__).resolve().parent.parent / "results" / "upworthy"
+            results_dir = repo_root / "results" / "upworthy"
         self.results_dir = Path(results_dir)
         self.results_dir.mkdir(parents=True, exist_ok=True)
         self._csv_path = self.results_dir / "trials.csv"
@@ -179,10 +181,24 @@ class UpworthyBlackBox:
         self._trial_count = self._count_existing_trials()
 
         # ------------------------------------------------------------------
-        # Load data once — all trials share this in-memory DataFrame
+        # Resolve data paths — prefer the bundled in-repo copy under
+        # data/upworthy/ so this works out of the box for graders.  If those
+        # files are not present, fall back to the user-supplied --upworthy-repo
+        # location (the original STAT 230A repo layout).
         # ------------------------------------------------------------------
-        cats_path  = self.upworthy_repo / "data" / "processed" / "categories_raw.csv"
-        clean_path = self.upworthy_repo / "data" / "processed" / "confirmatory_clean.csv"
+        bundled_cats  = repo_root / "data" / "upworthy" / "categories_raw.csv"
+        bundled_clean = repo_root / "data" / "upworthy" / "confirmatory_clean.csv"
+
+        if bundled_cats.exists() and bundled_clean.exists():
+            cats_path, clean_path = bundled_cats, bundled_clean
+        elif self.upworthy_repo is not None:
+            cats_path  = self.upworthy_repo / "data" / "processed" / "categories_raw.csv"
+            clean_path = self.upworthy_repo / "data" / "processed" / "confirmatory_clean.csv"
+        else:
+            raise FileNotFoundError(
+                f"Upworthy data files not found at {bundled_cats.parent} and "
+                f"no --upworthy-repo override was provided."
+            )
 
         if not cats_path.exists():
             raise FileNotFoundError(

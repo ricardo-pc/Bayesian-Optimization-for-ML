@@ -4,9 +4,16 @@ channels:
   - defaults
 dependencies:
   - python=3.11
+  # Core scientific stack — used by src/gp.py, src/acquisition.py, src/bo.py
   - numpy>=1.26
-  - scipy>=1.12
-  - pandas>=2.1
+  - scipy>=1.12          # cho_factor / cho_solve for GP, L-BFGS-B for EI, f_oneway for Upworthy
+  - pandas>=2.1          # trial logging
+  # Plotting (notebooks only)
   - matplotlib>=3.8
+  # Notebook environment
   - jupyterlab>=4.0
   - ipykernel
+  # NCF training (only needed to re-run jobs/run_bo_ncf.py on a GPU node).
+  # Install separately on the GPU machine — torch is heavy and is NOT required
+  # to view results or run the Upworthy / Branin notebooks:
+  #   pip install torch
